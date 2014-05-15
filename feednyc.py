@@ -5,23 +5,16 @@ import math
 
 from collections import defaultdict
 
-# 3 months within 10%
-
-#todo similar - tune sensitivity
-
-#todo fix stuff in missing data filter
-#todo inheritance question
-#todo stat question
-#todo look over matching part (beginning)
 #todo fix filter on active agencies (fiscal year v. financial year)
+#todo fix stuff in missing data filter
+#todo look over matching part (beginning)
 
 #todo are pickles weird?
 #todo fill in agency type in EFRO Map CSV
 
-# -----------------------
-
 #todo exclude agencies from filters
-#todo skipped - identify brackets v. begin/end missing
+
+# -----------------------
 
 #todo More elegant unicode decoding?
 
@@ -85,12 +78,10 @@ class FeedNYCDatum:
 
 
 class BaseFilter():
-    # stores all bad data for this filter
-    badData = defaultdict(list) # efro -> datum
 
     def __init__(self):
-        #todo why is this needed?  weird inheritance is happening.
-        self.badData.clear()
+        # stores all bad data for this filter
+        self.badData = defaultdict(list) # efro -> datum
 
     # flag should be a string that can uniquely identify the filter
     def print_bad_data(self, flag, datumExtraStr = None, filterFn = None):
@@ -120,7 +111,7 @@ class MealFactorFilter(BaseFilter):
 
 
 class SimilarFilter(BaseFilter):
-    def __init__(self, sensitivity = 1, absThresh = 0, relThresh = 0):
+    def __init__(self, sensitivity=1, absThresh=0, relThresh=0):
         BaseFilter.__init__(self)
 
         self.SENSITIVITY = sensitivity
@@ -146,11 +137,9 @@ class SimilarFilter(BaseFilter):
 
                 totCount = 0
                 curBadTotServed = set()
-                #todo make this a filter
-                for n in totServedSet:
-                    if abs(n - totServed) <= thresh:
-                        totCount += histo[n]
-                        curBadTotServed.add(n)
+                for n in filter(lambda x: abs(x - totServed) <= thresh, totServedSet):
+                    totCount += histo[n]
+                    curBadTotServed.add(n)
 
                 if count >= self.SENSITIVITY:
                     badTotServed.update(curBadTotServed)
