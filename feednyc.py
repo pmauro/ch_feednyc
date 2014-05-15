@@ -6,14 +6,9 @@ import copy
 
 from collections import defaultdict
 
-#todo look over matching part (beginning)
-#todo fix filter on active agencies (fiscal year v. financial year)
-
 #todo are pickles weird?
 #todo fill in agency type in EFRO Map CSV
-
 #todo exclude agencies from filters
-#todo warn if no EFRO data for agency
 
 # -----------------------
 
@@ -24,6 +19,7 @@ from collections import defaultdict
 # Inputs (eventually these become command line/GUI options)
 ANALYSIS_MAX = 201404
 ANALYSIS_MIN = 201301
+# output has to be a subset of analysis for this to DTRT
 OUTPUT_MAX = 201404
 OUTPUT_MIN = 201401
 
@@ -35,15 +31,9 @@ OUTLIER_MAX_STDDEV = 2.0
 
 # -------
 
-YEARS = (2010, 2011, 2012, 2013, 2014) # 2014 error in pickle???
-
 FEEDNYC_PICKLE_DIR = '/Users/patrickmauro/code/ch/pickles/'
-# make PICKLE file name friendly
-
 ACTIVE_AGENCY_CSV = "/Users/patrickmauro/code/ch/active-agencies.csv"
 EFRO_MAP_CSV = "/Users/patrickmauro/code/ch/efro-map.csv"
-#NAME_MAPPING_CSV = "/Users/patrickmauro/code/ch/mapping.csv" # CH -> FeedNYC
-
 
 # -----------------------------------------------------------------------------
 # Classes
@@ -158,7 +148,7 @@ class SkippedDataFilter(BaseFilter):
             return month
 
         year = math.floor(month / 100)
-        month = month % 100
+        month %= 100
         sign = 1 if amount > 0 else -1
         amount = abs(amount)
 
@@ -225,42 +215,43 @@ class ZeroFilter(BaseFilter):
     def print_bad_data(self):
         BaseFilter.print_bad_data(self, 'zeros')
 
+
 class OutlierFilter(BaseFilter):
-        def __init__(self, stdDev):
-                BaseFilter.__init__(self)
-                self.sdThresh = stdDev
+    def __init__(self, stdDev):
+            BaseFilter.__init__(self)
+            self.sdThresh = stdDev
 
-        def filter(self, data):
-            for efro, efroSet in data.items():
-                sum = 0
-                sum2 = 0
-                n = len(efroSet)
-                for month, datum in efroSet.items():
-                    totServed = datum.childrenServed + datum.adultsServed + datum.elderlyServed
-                    sum += totServed
-                    sum2 += (totServed * totServed)
+    def filter(self, data):
+        for efro, efroSet in data.items():
+            sum = 0
+            sum2 = 0
+            n = len(efroSet)
+            for month, datum in efroSet.items():
+                totServed = datum.childrenServed + datum.adultsServed + datum.elderlyServed
+                sum += totServed
+                sum2 += (totServed * totServed)
 
-                # don't divide by 0
-                if n <= 2:
+            # don't divide by 0
+            if n <= 2:
+                continue
+
+            #todo Is it proper to subtract out the element we're testing?
+            for month, datum in efroSet.items():
+                totServed = datum.childrenServed + datum.adultsServed + datum.elderlyServed
+                if totServed == 0:
                     continue
 
-                #todo Is it proper to subtract out the element we're testing?
-                for month, datum in efroSet.items():
-                    totServed = datum.childrenServed + datum.adultsServed + datum.elderlyServed
-                    if totServed == 0:
-                        continue
+                nSum = sum - totServed
+                nSum2 = sum2 - (totServed * totServed)
 
-                    nSum = sum - totServed
-                    nSum2 = sum2 - (totServed * totServed)
+                mean = nSum / (n - 1)
+                stdDev = math.sqrt((nSum2 / (n - 2)) - (mean * mean))
 
-                    mean = nSum / (n - 1)
-                    stdDev = math.sqrt((nSum2 / (n - 2)) - (mean * mean))
+                if abs(totServed - mean) > stdDev * self.sdThresh:
+                    self.badData[efro].append(datum)
 
-                    if abs(totServed - mean) > stdDev * self.sdThresh:
-                        self.badData[efro].append(datum)
-
-        def print_bad_data(self):
-            BaseFilter.print_bad_data(self, 'outlier')
+    def print_bad_data(self):
+        BaseFilter.print_bad_data(self, 'outlier')
 
 
 #-----------------------------------------------------------------------------
@@ -268,13 +259,26 @@ class OutlierFilter(BaseFilter):
 if __name__ == "__main__":
     # Figure out our date range
     minY = int(math.floor(ANALYSIS_MIN / 100))
+    minM = int(ANALYSIS_MIN % 100)
     maxY = int(math.floor(ANALYSIS_MAX / 100))
+    maxM = int(ANALYSIS_MAX % 100)
+    # we need to do this to split on fiscal years correctly
+    # FYxx is from July 1, 20xx-1 to June 30, 20xx, i.e., FYxx ends in 20xx
+    if minM > 6:
+        minY += 1
+    if maxM > 6:
+        maxY += 1
     analysisYears = range(minY, maxY + 1)
 
+    # STEP 1
     # Read in the EFRO Map
     chAcct2efro = dict()
-    efro2chAcct = dict()
-    name2efro = dict()
+    name2efro = defaultdict(set)
+    efro2data = dict()
+
+    class EFROData():
+        pass
+
     with open(EFRO_MAP_CSV, 'rbU') as csvfile:
         reader = csv.reader(csvfile)
 
@@ -286,26 +290,40 @@ if __name__ == "__main__":
             # get rid of the unicode nonsense (thanks MSFT!)
             row = map(lambda x: str(x.decode("ascii", "ignore")), row)
 
-            efro = int(row[0])
-            chAcct = row[1]
-            idAlias = row[2]
-            name = row[3]
-            agencyType = row[4]
+            efro_data = EFROData()
+            efro_data.efro = int(row[0])
+            efro_data.chAcct = row[1]
+            efro_data.idAlias = row[2]
+            efro_data.name = row[3]
+            efro_data.agencyType = row[4]
 
-            chAcct2efro[chAcct] = efro
-            efro2chAcct[efro] = chAcct
+            chAcct2efro[efro_data.chAcct] = efro_data.efro
+            efro2data[efro_data.efro] = efro_data
 
-            # different efros are OK as long as program types differ
-            #todo check for this?
-            if name in name2efro and efro == name2efro[name]:
-                print "Duplicate entries for name '%s' and efro '%s'." % (name, efro)
-            else:
-                name2efro[name] = efro
+            if efro_data.name in name2efro:
+                # If a name-efro pair is in the CSV more than once, this is an error.
+                if efro_data.efro in name2efro[efro_data.name]:
+                    print "Duplicate entries for name '%s' and efro '%s'." % (efro_data.name, efro_data.efro)
 
+                # Make sure that two agencies with the same name have different agency types
+                for existing_efro in name2efro[efro_data.name]:
+                    existingAT = efro2data[existing_efro].agencyType
+                    if efro_data.agencyType == existingAT:
+                        print "Two agencies with the same name and agency type: %s, %s (%d, %d)" % \
+                              (efro_data.name, efro_data.agencyType, efro_data.efro, existing_efro)
+
+            name2efro[efro_data.name].add(efro_data.efro)
+
+    # STEP 2
     # Process the active agencies list (from CH)
-    missingNames = set()
-    chNames = set()
+
+    # all the names of active agencies
+    ch_names = set()
+    # names for which we don't have an EFRO mapping
+    names_wo_efromap = set()
+    # efros that are active in our ranges AND have a efro mapping
     goodEFROs = set()
+    
     with open(ACTIVE_AGENCY_CSV, 'rbU') as csvfile:
         reader = csv.reader(csvfile)
 
@@ -323,14 +341,14 @@ if __name__ == "__main__":
             name = row[2]
             year = row[3]
 
-            chNames.add(name)
+            ch_names.add(name)
 
             # filter by fiscal year if so specified
             if year not in fyFilterSet:
                 continue
 
             if chAcct not in chAcct2efro:
-                missingNames.add(name)
+                names_wo_efromap.add(name)
             else:
                 goodEFROs.add(int(chAcct2efro[chAcct]))
 
@@ -338,15 +356,16 @@ if __name__ == "__main__":
             # for consistency among names for the same chAcct
 
     # Do some error checking
-    for name in set(name2efro.keys()) - chNames:
+    for name in set(name2efro.keys()) - ch_names:
         print("Mapping specified for name not in CH active agency file: %s" % name)
-    print("%d CH name(s) missing from mapping file:" % len(missingNames))
-    for name in missingNames:
+
+    print("%d CH name(s) missing from mapping file:" % len(names_wo_efromap))
+    for name in names_wo_efromap:
         print("\t%s" % name)
 
+    # STEP 3
     # Read in the pickles
     fnData = defaultdict(dict) # efro->month->datum
-    #todo warn when file doesn't exist
     for year in analysisYears:
         with open(FEEDNYC_PICKLE_DIR + "FeedNYC-All-%d.pickle" % year, 'r') as pickleFile:
             for curTup in pickle.load(pickleFile):
@@ -359,6 +378,11 @@ if __name__ == "__main__":
                 if datum.efro in goodEFROs:
                     fnData[datum.efro][datum.sampleMonth] = datum
 
+    # print out an error if we didn't see all the efros we expected
+    for efro in goodEFROs - set(fnData.keys()):
+        print("Did not see data for efro %d (%s)" % (efro, efro2data[efro].name))
+
+    # STEP 4
     # Now do some filtering
     f = MealFactorFilter()
     f.filter(fnData)
