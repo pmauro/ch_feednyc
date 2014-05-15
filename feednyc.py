@@ -2,17 +2,18 @@
 import pickle
 import csv
 import math
+import copy
 
 from collections import defaultdict
 
-#todo fix filter on active agencies (fiscal year v. financial year)
-#todo fix stuff in missing data filter
 #todo look over matching part (beginning)
+#todo fix filter on active agencies (fiscal year v. financial year)
 
 #todo are pickles weird?
 #todo fill in agency type in EFRO Map CSV
 
 #todo exclude agencies from filters
+#todo warn if no EFRO data for agency
 
 # -----------------------
 
@@ -152,58 +153,65 @@ class SimilarFilter(BaseFilter):
 
 
 class SkippedDataFilter(BaseFilter):
-    #todo make this work for adjustments greater than +1 or -1
     def adjust_month(self, month, amount):
+        if amount == 0:
+            return month
+
         year = math.floor(month / 100)
         month = month % 100
+        sign = 1 if amount > 0 else -1
+        amount = abs(amount)
 
-        if amount > 0:
-            if month == 12:
-                month = 1
-                year += 1
-            else:
-                month += 1
-        else:
-            if month == 1:
-                month = 12
-                year -= 1
-            else:
-                month -= 1
+        yDiff = int(amount / 12)
+        mDiff = amount % 12
+
+        year += (yDiff * sign)
+        month += (mDiff * sign)
+        if month > 12:
+            year += 1
+            month -= 12
+        elif month < 1:
+            year -= 1
+            month += 12
 
         return int(year * 100 + month)
 
+    def months_between(self, begin, end):
+        """
+        Returns a list of months in [begin, end]
+
+        N.B. This breaks if begin or end aren't a valid YYYYMM month.
+        """
+        if end < begin:
+            return []
+
+        month_list = []
+        cur_month = begin
+        while cur_month != end:
+            month_list.append(cur_month)
+            cur_month = self.adjust_month(cur_month, 1)
+        month_list.append(end)
+
+        return month_list
+
     def filter(self, data):
+        req_months = set(self.months_between(OUTPUT_MIN, OUTPUT_MAX))
+
         for efro, efroSet in data.items():
-            #todo make sure we print something out if all data for an agency is missing
-            lastMonth = self.adjust_month(OUTPUT_MIN, -1)
-            lastDatum = None
-            badMonths = set() # don't output the same month twice!
-            for month, datum in sorted(efroSet.items(), key=lambda x: x[0]):
-                if datum.sampleMonth < OUTPUT_MIN:
-                    continue
+            missing_months = req_months - set(efroSet.keys())
 
-                if self.adjust_month(lastMonth, 1) != month:
-                    if lastMonth not in badMonths and lastDatum is not None:
-                        self.badData[efro].append(lastDatum)
-                        badMonths.add(lastMonth)
-
-                    self.badData[efro].append(datum)
-                    badMonths.add(month)
-
-                lastMonth = month
-                lastDatum = datum
-
-            if lastMonth != OUTPUT_MAX and lastDatum != None and lastMonth not in badMonths:
-                self.badData[efro].append(lastDatum)
-
-    def filterFn(self, datum):
-        totServed = datum.childrenServed + datum.adultsServed + datum.elderlyServed
-        if totServed == 0:
-            return True
-        return False
+            for month in missing_months:
+                sample_datum = copy.copy(efroSet.values()[0])
+                sample_datum.elderlyServed = 0
+                sample_datum.adultsServed = 0
+                sample_datum.childrenServed = 0
+                sample_datum.updateDate = ""
+                sample_datum.updateUser = ""
+                sample_datum.sampleMonth = month
+                self.badData[efro].append(sample_datum)
 
     def print_bad_data(self):
-        BaseFilter.print_bad_data(self, 'skipped-entries', filterFn=self.filterFn)
+        BaseFilter.print_bad_data(self, 'skipped-entries')
 
 
 class ZeroFilter(BaseFilter):
