@@ -7,18 +7,21 @@ from collections import defaultdict
 
 # 3 months within 10%
 
+#todo similar - tune sensitivity
+
 #todo fix stuff in missing data filter
-#todo are pickles weird?
 #todo inheritance question
 #todo stat question
+#todo look over matching part (beginning)
+#todo fix filter on active agencies (fiscal year v. financial year)
+
+#todo are pickles weird?
 #todo fill in agency type in EFRO Map CSV
 
-#todo look over matching part (beginning)
+# -----------------------
 
-#todo handle agencies kicked out mid-year?
 #todo exclude agencies from filters
 #todo skipped - identify brackets v. begin/end missing
-#todo similar - tune sensitivity
 
 #todo More elegant unicode decoding?
 
@@ -30,9 +33,11 @@ ANALYSIS_MIN = 201301
 OUTPUT_MAX = 201404
 OUTPUT_MIN = 201401
 
+SIMILAR_SENSITIVITY = 3
 SIMILAR_THRESH_ABS = 0
 SIMILAR_THRESH_REL = 0
-MAX_STDDEV = 2.0
+
+OUTLIER_MAX_STDDEV = 2.0
 
 # -------
 
@@ -115,19 +120,20 @@ class MealFactorFilter(BaseFilter):
 
 
 class SimilarFilter(BaseFilter):
-    def __init__(self, absThresh = 0, relThresh = 0):
+    def __init__(self, sensitivity = 1, absThresh = 0, relThresh = 0):
         BaseFilter.__init__(self)
 
+        self.SENSITIVITY = sensitivity
         self.ABS_THRESH = absThresh
         self.REL_THRESH = relThresh
 
     def filter(self, data):
-        #todo do filtering on per-age (children, adults, elderly) basis?
         for efro, efroSet in data.items():
             histo = defaultdict(int)
             totServed2datum = defaultdict(list)
             for month, datum in efroSet.items():
                 totServed = datum.childrenServed + datum.adultsServed + datum.elderlyServed
+                # we print out zeros elsewhere (ZeroFilter)
                 if totServed == 0:
                     continue
                 histo[totServed] += 1
@@ -136,21 +142,21 @@ class SimilarFilter(BaseFilter):
             totServedSet = set(histo.keys())
             badTotServed = set()
             for totServed, count in histo.items():
-                if totServed in badTotServed:
-                    continue
-
                 thresh = max(self.ABS_THRESH, self.REL_THRESH * totServed)
 
-                gotMatch = False
+                totCount = 0
+                curBadTotServed = set()
+                #todo make this a filter
                 for n in totServedSet:
-                    if n == totServed:
-                        continue
                     if abs(n - totServed) <= thresh:
-                        badTotServed.add(n)
-                        self.badData[efro].extend(totServed2datum[n])
+                        totCount += histo[n]
+                        curBadTotServed.add(n)
 
-                if gotMatch or count > 1:
-                    self.badData[efro].extend(totServed2datum[totServed])
+                if count >= self.SENSITIVITY:
+                    badTotServed.update(curBadTotServed)
+
+            for n in badTotServed:
+                self.badData[efro].extend(totServed2datum[n])
 
     def print_bad_data(self):
         BaseFilter.print_bad_data(self, "too-similar")
@@ -361,7 +367,7 @@ if __name__ == "__main__":
     f.filter(fnData)
     f.print_bad_data()
 
-    f = SimilarFilter(SIMILAR_THRESH_ABS, SIMILAR_THRESH_REL)
+    f = SimilarFilter(SIMILAR_SENSITIVITY, SIMILAR_THRESH_ABS, SIMILAR_THRESH_REL)
     f.filter(fnData)
     f.print_bad_data()
 
@@ -373,6 +379,6 @@ if __name__ == "__main__":
     f.filter(fnData)
     f.print_bad_data()
 
-    f = OutlierFilter(MAX_STDDEV)
+    f = OutlierFilter(OUTLIER_MAX_STDDEV)
     f.filter(fnData)
     f.print_bad_data()
