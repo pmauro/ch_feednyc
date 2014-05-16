@@ -6,13 +6,20 @@ import copy
 
 from collections import defaultdict
 
-#todo filters:
-# defunct agencies
-# things that have been checked out
+# -----------------------------------------------------------------------------
 
-#----------
+#todo Make prev error file accept flags for dates
 
 #todo Make sure we have all EFROs for a given account
+#todo Figure out where FeedNYC's notion of CH agencies differs from CH's POV.
+
+#todo add documentation
+
+# -------------------------
+
+#todo Handle contextual points more cleanly
+#todo Specify acceptable 'too-similar' values for an agency.
+
 #todo More elegant unicode decoding?
 
 # -----------------------------------------------------------------------------
@@ -53,6 +60,9 @@ OUTLIER_MAX_STDDEV = 2.0
 FEEDNYC_PICKLE_DIR = '/Users/patrickmauro/code/ch/pickles/'
 ACTIVE_AGENCY_CSV = "/Users/patrickmauro/code/ch/active-agencies.csv"
 EFRO_MAP_CSV = "/Users/patrickmauro/code/ch/efro-map.csv"
+
+DEFUNCT_AGENCIES_CSV = "/Users/patrickmauro/code/ch/defunct-agencies.csv"
+ERROR_HISTORY_CSV = "/Users/patrickmauro/code/ch/error-history.csv"
 
 # -----------------------------------------------------------------------------
 # Classes
@@ -103,9 +113,12 @@ class FeedNYCDatum:
 
 
 class BaseFilter():
+    PREV_ERROR_FLAG = "P"
+
     def __init__(self):
         # stores all bad data for this filter
         self.badData = defaultdict(list) # efro -> datum
+        self.filter_flag = None
 
     def print_header(self):
         datum = FeedNYCDatum()
@@ -114,20 +127,45 @@ class BaseFilter():
     def filter_by_date(self, datum):
         return datum.sampleMonth < OUTPUT_MIN or datum.sampleMonth > OUTPUT_MAX
 
+    def filter_by_history(self, datum):
+        # see if we have an entry for this datum and type of flag in the prev_error_map
+        if self.filter_flag not in prev_error_map:
+            return False
+        id = "%d-%d" % (datum.efro, datum.sampleMonth)
+        if id not in prev_error_map[self.filter_flag]:
+            return False
+
+        # if we've gotten here, we have an entry for this filter & datum
+        if prev_error_map[self.filter_flag][id]:  # if true, we print
+            datum.flag += self.PREV_ERROR_FLAG
+            return False
+
+        return True
+
+    def standard_filter(self, datum):
+        if self.filter_by_date(datum):
+            return True
+        return self.filter_by_history(datum)
+
     # flag should be a string that can uniquely identify the filter
-    def print_bad_data(self, flag, filterFn = None):
+    def print_bad_data(self, filterFn = None):
+        if filterFn == None:
+            filterFn = self.standard_filter
+
         for efroBD in self.badData.values():
             for badDatum in efroBD:
-                if filterFn == None:
-                    filterFn = self.filter_by_date
                 if filterFn(badDatum):
                     continue
 
-                print "%s,%s" % (flag, badDatum)
+                print "%s,%s" % (self.filter_flag, badDatum)
 
 
 class MealFactorFilter(BaseFilter):
     NORMAL_MFS = {1, 9}
+
+    def __init__(self):
+        BaseFilter.__init__(self)
+        self.filter_flag = "meal-factor"
 
     def filter(self, data):
         for efro, efroSet in data.items():
@@ -135,13 +173,15 @@ class MealFactorFilter(BaseFilter):
                 if datum.mealFactor not in self.NORMAL_MFS:
                     self.badData[efro].append(datum)
 
-    def print_bad_data(self):
-        BaseFilter.print_bad_data(self, "meal-factor")
-
 
 class SimilarFilter(BaseFilter):
+    CONTEXT_FLAG = 'c'
+    REAL_DATA_FLAG = 'r'
+
     def __init__(self, sensitivity=1, absThresh=0, relThresh=0):
         BaseFilter.__init__(self)
+
+        self.filter_flag = "too-similar"
 
         self.SENSITIVITY = sensitivity
         self.ABS_THRESH = absThresh
@@ -175,20 +215,19 @@ class SimilarFilter(BaseFilter):
                 if count >= self.SENSITIVITY:
                     # we only add this to the output if at least one of the currently bad entries is
                     # in the output window
-                    got_recent_entry = False
+                    got_printable_entry = False
                     for tot in curBadTotServed:
                         for datum in totServed2data[tot]:
-                            if not self.filter_by_date(datum):
-                                got_recent_entry = True
-                                break
-                        if got_recent_entry:
-                            badTotServed.update(curBadTotServed)
-                            break
+                            if not self.filter_by_history(datum) and not self.filter_by_date(datum):
+                                got_printable_entry = True
+
+                    if got_printable_entry:
+                        badTotServed.update(curBadTotServed)
 
             for n in badTotServed:
                 for d in totServed2data[n]:
                     d = copy.copy(d)
-                    d.flag = "c" if self.filter_by_date(d) else "r"
+                    d.flag += self.CONTEXT_FLAG if self.filter_by_date(d) else self.REAL_DATA_FLAG
                     self.badData[efro].append(d)
 
     # We don't filter by date for this because entries that aren't in the output date range give context
@@ -196,10 +235,14 @@ class SimilarFilter(BaseFilter):
         return False
 
     def print_bad_data(self):
-        BaseFilter.print_bad_data(self, "too-similar", filterFn=self.filter_none)
+        BaseFilter.print_bad_data(self, filterFn=self.filter_none)
 
 
 class SkippedDataFilter(BaseFilter):
+    def __init__(self):
+        BaseFilter.__init__(self)
+        self.filter_flag = "skipped-entries"
+
     def adjust_month(self, month, amount):
         if amount == 0:
             return month
@@ -258,10 +301,15 @@ class SkippedDataFilter(BaseFilter):
                 self.badData[efro].append(sample_datum)
 
     def print_bad_data(self):
-        BaseFilter.print_bad_data(self, 'skipped-entries')
+        BaseFilter.print_bad_data(self)
 
 
 class ZeroFilter(BaseFilter):
+
+    def __init__(self):
+        BaseFilter.__init__(self)
+        self.filter_flag = "zeros"
+
     def filter(self, data):
         for efro, efroSet in data.items():
             for month, datum in efroSet.items():
@@ -269,14 +317,14 @@ class ZeroFilter(BaseFilter):
                 if totServed == 0:
                     self.badData[efro].append(datum)
 
-    def print_bad_data(self):
-        BaseFilter.print_bad_data(self, 'zeros')
-
 
 class OutlierFilter(BaseFilter):
+
     def __init__(self, stdDev):
-            BaseFilter.__init__(self)
-            self.sdThresh = stdDev
+        BaseFilter.__init__(self)
+        self.filter_flag = "outlier"
+
+        self.sdThresh = stdDev
 
     def filter(self, data):
         for efro, efroSet in data.items():
@@ -306,9 +354,6 @@ class OutlierFilter(BaseFilter):
 
                 if abs(totServed - mean) > stdDev * self.sdThresh:
                     self.badData[efro].append(datum)
-
-    def print_bad_data(self):
-        BaseFilter.print_bad_data(self, 'outlier')
 
 
 def get_years_in_range(min_month, max_month):
@@ -387,7 +432,6 @@ if __name__ == "__main__":
     goodEFROs = set()
     # all the ch accts
     all_ch_accts = set()
-    
     with open(ACTIVE_AGENCY_CSV, 'rbU') as csvfile:
         reader = csv.reader(csvfile)
 
@@ -426,6 +470,24 @@ if __name__ == "__main__":
         print("active-agency no-efro-entry\t%s\t%s" % (account, name))
 
     # STEP 3
+    # Don't analyze data for defunct agencies
+    defunct_efros = set()
+    with open(DEFUNCT_AGENCIES_CSV, 'rbU') as csvfile:
+        reader = csv.reader(csvfile)
+
+        # skip the header row
+        next(reader, None)
+
+        for row in reader:
+            # get rid of the unicode nonsense (thanks MSFT!)
+            row = map(lambda x: str(x.decode("ascii", "ignore")), row)
+
+            defunct_efros.add(int(row[0]))
+
+    # Don't print out data for any defunct agencies
+    goodEFROs -= defunct_efros
+
+    # STEP 4
     # Read in the pickles
     # The data is stored by fiscal year.
     fnData = defaultdict(dict) # efro->month->datum
@@ -446,8 +508,29 @@ if __name__ == "__main__":
     for efro in goodEFROs - set(fnData.keys()):
         print("feednyc-data no-data\t\t%d\t%s" % (efro, efro2data[efro].name))
 
-    # STEP 4
+    # STEP 5
+    # Figure out which issues have already been analyzed
+    prev_error_map = defaultdict(dict) # flag->id->doPrint
+    with open(ERROR_HISTORY_CSV, 'rbU') as csvfile:
+        reader = csv.reader(csvfile)
+
+        # skip the header row
+        next(reader, None)
+
+        for row in reader:
+            # get rid of the unicode nonsense (thanks MSFT!)
+            row = map(lambda x: str(x.decode("ascii", "ignore")), row)
+
+            id = row[0]
+            flag = row[1]
+            do_print = (row[2] == "y" or row[2] == "Y")
+
+            prev_error_map[flag][id] = do_print
+
+    # STEP 6
     # Now do some filtering
+
+    # print a separator
     print ""
 
     f = MealFactorFilter()
