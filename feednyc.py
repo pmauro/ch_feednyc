@@ -6,11 +6,6 @@ import copy
 
 from collections import defaultdict
 
-#todo new feature
-# too-similar - print out contextual entries#
-
-#----------
-
 #todo filters:
 # defunct agencies
 # things that have been checked out
@@ -116,14 +111,16 @@ class BaseFilter():
         datum = FeedNYCDatum()
         print "error_type,%s" % datum.print_header()
 
+    def filter_by_date(self, datum):
+        return datum.sampleMonth < OUTPUT_MIN or datum.sampleMonth > OUTPUT_MAX
+
     # flag should be a string that can uniquely identify the filter
     def print_bad_data(self, flag, filterFn = None):
         for efroBD in self.badData.values():
             for badDatum in efroBD:
-                if badDatum.sampleMonth < OUTPUT_MIN or badDatum.sampleMonth > OUTPUT_MAX:
-                    continue
-
-                if filterFn is not None and filterFn(badDatum):
+                if filterFn == None:
+                    filterFn = self.filter_by_date
+                if filterFn(badDatum):
                     continue
 
                 print "%s,%s" % (flag, badDatum)
@@ -153,14 +150,14 @@ class SimilarFilter(BaseFilter):
     def filter(self, data):
         for efro, efroSet in data.items():
             histo = defaultdict(int)
-            totServed2datum = defaultdict(list)
+            totServed2data = defaultdict(list)
             for month, datum in efroSet.items():
                 totServed = datum.childrenServed + datum.adultsServed + datum.elderlyServed
                 # we print out zeros elsewhere (ZeroFilter)
                 if totServed == 0:
                     continue
                 histo[totServed] += 1
-                totServed2datum[totServed].append(datum)
+                totServed2data[totServed].append(datum)
 
             totServedSet = set(histo.keys())
             badTotServed = set()
@@ -169,18 +166,37 @@ class SimilarFilter(BaseFilter):
 
                 totCount = 0
                 curBadTotServed = set()
+                # figure out which counts are within the threshold
                 for n in filter(lambda x: abs(x - totServed) <= thresh, totServedSet):
                     totCount += histo[n]
                     curBadTotServed.add(n)
 
+                # if we've gotten too many data points within our window, they're all suspect
                 if count >= self.SENSITIVITY:
-                    badTotServed.update(curBadTotServed)
+                    # we only add this to the output if at least one of the currently bad entries is
+                    # in the output window
+                    got_recent_entry = False
+                    for tot in curBadTotServed:
+                        for datum in totServed2data[tot]:
+                            if not self.filter_by_date(datum):
+                                got_recent_entry = True
+                                break
+                        if got_recent_entry:
+                            badTotServed.update(curBadTotServed)
+                            break
 
             for n in badTotServed:
-                self.badData[efro].extend(totServed2datum[n])
+                for d in totServed2data[n]:
+                    d = copy.copy(d)
+                    d.flag = "c" if self.filter_by_date(d) else "r"
+                    self.badData[efro].append(d)
+
+    # We don't filter by date for this because entries that aren't in the output date range give context
+    def filter_none(self, datum):
+        return False
 
     def print_bad_data(self):
-        BaseFilter.print_bad_data(self, "too-similar")
+        BaseFilter.print_bad_data(self, "too-similar", filterFn=self.filter_none)
 
 
 class SkippedDataFilter(BaseFilter):
@@ -362,7 +378,6 @@ if __name__ == "__main__":
             chAcct2efro[efro_data.chAcct].add(efro_data.efro)
             efro2data[efro_data.efro] = efro_data
 
-
     # STEP 2
     # Process the active agencies list (from CH)
 
@@ -434,7 +449,6 @@ if __name__ == "__main__":
     # STEP 4
     # Now do some filtering
     print ""
-
 
     f = MealFactorFilter()
     f.filter(fnData)
