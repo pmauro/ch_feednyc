@@ -44,7 +44,7 @@ from collections import defaultdict
 
 # Inputs (eventually these become command line/GUI options)
 ANALYSIS_MAX = 201404
-ANALYSIS_MIN = 201301
+ANALYSIS_MIN = 200907
 # output has to be a subset of analysis for this to DTRT
 OUTPUT_MAX = 201404
 OUTPUT_MIN = 201401
@@ -363,7 +363,7 @@ def get_years_in_range(min_month, max_month):
     minM = int(min_month % 100)
     maxY = int(math.floor(max_month / 100))
     maxM = int(max_month  % 100)
-    cal_year = range(minY, maxY)
+    cal_year = range(minY, maxY + 1)
     # we need to do this to split on fiscal years correctly
     # FYxx is from July 1, 20xx-1 to June 30, 20xx, i.e., FYxx ends in 20xx
     if minM > 6:
