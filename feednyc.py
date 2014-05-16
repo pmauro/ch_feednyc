@@ -6,13 +6,43 @@ import copy
 
 from collections import defaultdict
 
-#todo are pickles weird?
-#todo fill in agency type in EFRO Map CSV
-#todo exclude agencies from filters
+#todo output formatting
+# date format for excel MM-YYYY
+# add sum column
+# tag output by agency type
+# add header
 
-# -----------------------
+#todo new feature
+# too-similar - print out contextual entries#
 
+#----------
+
+#todo filters:
+# defunct agencies
+# things that have been checked out
+
+#----------
+
+#todo Make sure we have all EFROs for a given account
 #todo More elegant unicode decoding?
+
+# -----------------------------------------------------------------------------
+
+# efro-map duplicate-efros
+# Multiple entries in EFRO map for same EFRO
+#
+# efro-map duplicate-entries
+# Multiple entries in EFRO map with same CH account, alias, and agency type
+#
+# active-agency never-active
+# Entry in EFRO map for given agency but the agency isn't in the active agency file
+#
+# active-agency no-efro-entry
+# No EFRO mapping in efro-map file for the given agency (CH account)
+#
+# feednyc-data no-data
+# No data for an active agency
+#
 
 # -----------------------------------------------------------------------------
 
@@ -254,28 +284,35 @@ class OutlierFilter(BaseFilter):
         BaseFilter.print_bad_data(self, 'outlier')
 
 
-#-----------------------------------------------------------------------------
-
-if __name__ == "__main__":
+def get_years_in_range(min_month, max_month):
+    # inputs are YYYYMM
     # Figure out our date range
-    minY = int(math.floor(ANALYSIS_MIN / 100))
-    minM = int(ANALYSIS_MIN % 100)
-    maxY = int(math.floor(ANALYSIS_MAX / 100))
-    maxM = int(ANALYSIS_MAX % 100)
+    minY = int(math.floor(min_month / 100))
+    minM = int(min_month % 100)
+    maxY = int(math.floor(max_month / 100))
+    maxM = int(max_month  % 100)
+    cal_year = range(minY, maxY)
     # we need to do this to split on fiscal years correctly
     # FYxx is from July 1, 20xx-1 to June 30, 20xx, i.e., FYxx ends in 20xx
     if minM > 6:
         minY += 1
     if maxM > 6:
         maxY += 1
-    analysisYears = range(minY, maxY + 1)
+    fiscal_year = range(minY, maxY + 1)
+
+    return cal_year, fiscal_year
+
+#-----------------------------------------------------------------------------
+
+if __name__ == "__main__":
+    # Figure out our date range
+    analysis_range_cy, analysis_range_fy = get_years_in_range(ANALYSIS_MIN, ANALYSIS_MAX)
+    output_range_cy, output_range_fy = get_years_in_range(OUTPUT_MIN, OUTPUT_MAX)
 
     # STEP 1
     # Read in the EFRO Map
-    chAcct2efro = dict()
-    name2efro = defaultdict(set)
-    efro2data = dict()
-
+    chAcct2efro = defaultdict(set)  # acct -> set(efros)
+    efro2data = dict()              # efro -> data (should be unique)
     class EFROData():
         pass
 
@@ -297,32 +334,33 @@ if __name__ == "__main__":
             efro_data.name = row[3]
             efro_data.agencyType = row[4]
 
-            chAcct2efro[efro_data.chAcct] = efro_data.efro
+            # Make sure there aren't duplicate efros
+            if efro_data.efro in efro2data:
+                print "efro-map duplicate-efros\t%s\t%s" % (efro_data.efro, efro_data.name)
+                continue
+
+            # Also, make sure that if the account and alias are the same, then the agency types differ.
+            if efro_data.chAcct in chAcct2efro:
+                for old_efro in chAcct2efro[efro_data.chAcct]:
+                    old_data = efro2data[old_efro]
+                    if efro_data.idAlias == old_data.idAlias and efro_data.agencyType == old_data.agencyType:
+                        print "efro-map duplicate-entries\t%s\t%-40s%s\t%s\tefros %d %d" % \
+                              (efro_data.chAcct, efro_data.name, efro_data.idAlias, efro_data.agencyType,
+                               efro_data.efro, old_efro)
+
+            chAcct2efro[efro_data.chAcct].add(efro_data.efro)
             efro2data[efro_data.efro] = efro_data
 
-            if efro_data.name in name2efro:
-                # If a name-efro pair is in the CSV more than once, this is an error.
-                if efro_data.efro in name2efro[efro_data.name]:
-                    print "Duplicate entries for name '%s' and efro '%s'." % (efro_data.name, efro_data.efro)
-
-                # Make sure that two agencies with the same name have different agency types
-                for existing_efro in name2efro[efro_data.name]:
-                    existingAT = efro2data[existing_efro].agencyType
-                    if efro_data.agencyType == existingAT:
-                        print "Two agencies with the same name and agency type: %s, %s (%d, %d)" % \
-                              (efro_data.name, efro_data.agencyType, efro_data.efro, existing_efro)
-
-            name2efro[efro_data.name].add(efro_data.efro)
 
     # STEP 2
     # Process the active agencies list (from CH)
 
-    # all the names of active agencies
-    ch_names = set()
     # names for which we don't have an EFRO mapping
-    names_wo_efromap = set()
+    entries_wo_efromap = set()
     # efros that are active in our ranges AND have a efro mapping
     goodEFROs = set()
+    # all the ch accts
+    all_ch_accts = set()
     
     with open(ACTIVE_AGENCY_CSV, 'rbU') as csvfile:
         reader = csv.reader(csvfile)
@@ -330,7 +368,7 @@ if __name__ == "__main__":
         # skip the header row
         next(reader, None)
 
-        fyFilterSet = set(map(lambda x: "FY%s" % (x % 100), analysisYears))
+        fyFilterSet = set(map(lambda x: "FY%s" % (x % 100), output_range_fy))
 
         for row in reader:
             # get rid of the unicode nonsense (thanks MSFT!)
@@ -341,32 +379,31 @@ if __name__ == "__main__":
             name = row[2]
             year = row[3]
 
-            ch_names.add(name)
+            all_ch_accts.add(chAcct)
 
             # filter by fiscal year if so specified
             if year not in fyFilterSet:
                 continue
 
             if chAcct not in chAcct2efro:
-                names_wo_efromap.add(name)
+                entries_wo_efromap.add((name, chAcct))
             else:
-                goodEFROs.add(int(chAcct2efro[chAcct]))
+                goodEFROs.update(chAcct2efro[chAcct])
 
-            # The name of the agency might change in CH's database, so don't check
-            # for consistency among names for the same chAcct
+    # Print out agencies for which we have an entry in the EFRO map but no entry in the active agencies list
+    for account in set(chAcct2efro.keys()) - all_ch_accts:
+        name = efro2data[list(chAcct2efro[account])[0]].name
+        print("active-agency never-active\t%s\t%s" % (account, name))
 
-    # Do some error checking
-    for name in set(name2efro.keys()) - ch_names:
-        print("Mapping specified for name not in CH active agency file: %s" % name)
-
-    print("%d CH name(s) missing from mapping file:" % len(names_wo_efromap))
-    for name in names_wo_efromap:
-        print("\t%s" % name)
+    # Print out agencies taht appear in the active agencies list but that don't have an EFRO mapping
+    for name, account in entries_wo_efromap:
+        print("active-agency no-efro-entry\t%s\t%s" % (account, name))
 
     # STEP 3
     # Read in the pickles
+    # The data is stored by fiscal year.
     fnData = defaultdict(dict) # efro->month->datum
-    for year in analysisYears:
+    for year in analysis_range_fy:
         with open(FEEDNYC_PICKLE_DIR + "FeedNYC-All-%d.pickle" % year, 'r') as pickleFile:
             for curTup in pickle.load(pickleFile):
                 datum = FeedNYCDatum(curTup)
@@ -380,7 +417,7 @@ if __name__ == "__main__":
 
     # print out an error if we didn't see all the efros we expected
     for efro in goodEFROs - set(fnData.keys()):
-        print("Did not see data for efro %d (%s)" % (efro, efro2data[efro].name))
+        print("feednyc-data no-data\t\t%d\t%s" % (efro, efro2data[efro].name))
 
     # STEP 4
     # Now do some filtering
