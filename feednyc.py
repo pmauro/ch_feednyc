@@ -6,12 +6,6 @@ import copy
 
 from collections import defaultdict
 
-#todo output formatting
-# date format for excel MM-YYYY
-# add sum column
-# tag output by agency type
-# add header
-
 #todo new feature
 # too-similar - print out contextual entries#
 
@@ -71,41 +65,59 @@ EFRO_MAP_CSV = "/Users/patrickmauro/code/ch/efro-map.csv"
 # meal factor should be 9 or 1
 
 class FeedNYCDatum:
-    def __init__(self, pickle_tuple):
-        self.efro = pickle_tuple[0]
-        self.name = pickle_tuple[1]
-        self.type = pickle_tuple[2]
-        self.address = pickle_tuple[3]
-        self.district = pickle_tuple[4]
-        self.boro = pickle_tuple[5]
-        self.sampleMonth = int(pickle_tuple[6])
-        self.elderlyServed = pickle_tuple[7]
-        self.adultsServed = pickle_tuple[8]
-        self.childrenServed = pickle_tuple[9]
-        self.mealFactor = pickle_tuple[10]
-        self.updateDate = pickle_tuple[11]
-        self.updateUser = pickle_tuple[12]
+    def __init__(self, pickle_tuple=None):
+        if pickle_tuple != None:
+            self.efro = pickle_tuple[0]
+            self.name = pickle_tuple[1]
+            self.type = pickle_tuple[2]
+            self.address = pickle_tuple[3]
+            self.district = pickle_tuple[4]
+            self.boro = pickle_tuple[5]
+            self.sampleMonth = int(pickle_tuple[6])
+            self.elderlyServed = pickle_tuple[7]
+            self.adultsServed = pickle_tuple[8]
+            self.childrenServed = pickle_tuple[9]
+            self.mealFactor = pickle_tuple[10]
+            self.updateDate = pickle_tuple[11]
+            self.updateUser = pickle_tuple[12]
+
+        self.agencyType = ""
+        self.flag = ""
+
+    def print_header(self):
+        return "efro-month_id,name,efro,month,elderly_served,adults_served,children_served,meal_factor," \
+               "total_meals_served,agency_type,flag,"
 
     def __str__(self):
-        return "%(id)s,\"%(name)s\",%(efro)d,%(month)d,%(elderly)d,%(adult)d,%(children)d,%(factor)d" % \
+        total = (self.elderlyServed + self.adultsServed + self.childrenServed) * self.mealFactor
+
+        return "%(id)s,\"%(name)s\",%(efro)d,%(month)02d-%(year)d,%(elderly)d," \
+               "%(adult)d,%(children)d,%(factor)d,%(total)d,%(agencyType)s,%(flag)s," % \
                {'id': str(self.efro) + "-" + str(self.sampleMonth),
                 'name': self.name,
                 'efro': self.efro,
-                'month': self.sampleMonth,
+                'year': int(self.sampleMonth / 100),
+                'month': self.sampleMonth % 100,
                 'elderly': self.elderlyServed,
                 'adult': self.adultsServed,
                 'children': self.childrenServed,
-                'factor': self.mealFactor}
+                'factor': self.mealFactor,
+                'total': total,
+                'agencyType': self.agencyType,
+                'flag': self.flag}
 
 
 class BaseFilter():
-
     def __init__(self):
         # stores all bad data for this filter
         self.badData = defaultdict(list) # efro -> datum
 
+    def print_header(self):
+        datum = FeedNYCDatum()
+        print "error_type,%s" % datum.print_header()
+
     # flag should be a string that can uniquely identify the filter
-    def print_bad_data(self, flag, datumExtraStr = None, filterFn = None):
+    def print_bad_data(self, flag, filterFn = None):
         for efroBD in self.badData.values():
             for badDatum in efroBD:
                 if badDatum.sampleMonth < OUTPUT_MIN or badDatum.sampleMonth > OUTPUT_MAX:
@@ -114,8 +126,7 @@ class BaseFilter():
                 if filterFn is not None and filterFn(badDatum):
                     continue
 
-                extraStr = "" if datumExtraStr is None else "%s," % datumExtraStr(badDatum)
-                print ("%s,%s,%s" % (flag, badDatum, extraStr))
+                print "%s,%s" % (flag, badDatum)
 
 
 class MealFactorFilter(BaseFilter):
@@ -413,6 +424,7 @@ if __name__ == "__main__":
                 # We dump all agency data from FeedNYC, so we need to filter by the EFROs that are for active agencies
                 # for the target years.
                 if datum.efro in goodEFROs:
+                    datum.agencyType = efro2data[datum.efro].agencyType
                     fnData[datum.efro][datum.sampleMonth] = datum
 
     # print out an error if we didn't see all the efros we expected
@@ -421,8 +433,12 @@ if __name__ == "__main__":
 
     # STEP 4
     # Now do some filtering
+    print ""
+
+
     f = MealFactorFilter()
     f.filter(fnData)
+    f.print_header()
     f.print_bad_data()
 
     f = SimilarFilter(SIMILAR_SENSITIVITY, SIMILAR_THRESH_ABS, SIMILAR_THRESH_REL)
