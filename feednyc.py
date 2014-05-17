@@ -44,10 +44,10 @@ from collections import defaultdict
 
 # Inputs (eventually these become command line/GUI options)
 ANALYSIS_MAX = 201404
-ANALYSIS_MIN = 200907
+ANALYSIS_MIN = 201307
 # output has to be a subset of analysis for this to DTRT
 OUTPUT_MAX = 201404
-OUTPUT_MIN = 201401
+OUTPUT_MIN = 201307
 
 SIMILAR_SENSITIVITY = 3
 SIMILAR_THRESH_ABS = 0
@@ -412,6 +412,7 @@ if __name__ == "__main__":
                 continue
 
             # Also, make sure that if the account and alias are the same, then the agency types differ.
+            is_dup = False
             if efro_data.chAcct in chAcct2efro:
                 for old_efro in chAcct2efro[efro_data.chAcct]:
                     old_data = efro2data[old_efro]
@@ -419,6 +420,10 @@ if __name__ == "__main__":
                         print "efro-map duplicate-entries\t%s\t%-40s%s\t%s\tefros %d %d" % \
                               (efro_data.chAcct, efro_data.name, efro_data.idAlias, efro_data.agencyType,
                                efro_data.efro, old_efro)
+                        is_dup = True
+
+            if is_dup:
+                continue
 
             chAcct2efro[efro_data.chAcct].add(efro_data.efro)
             efro2data[efro_data.efro] = efro_data
@@ -465,7 +470,7 @@ if __name__ == "__main__":
         name = efro2data[list(chAcct2efro[account])[0]].name
         print("active-agency never-active\t%s\t%s" % (account, name))
 
-    # Print out agencies taht appear in the active agencies list but that don't have an EFRO mapping
+    # Print out agencies that appear in the active agencies list but that don't have an EFRO mapping
     for name, account in entries_wo_efromap:
         print("active-agency no-efro-entry\t%s\t%s" % (account, name))
 
